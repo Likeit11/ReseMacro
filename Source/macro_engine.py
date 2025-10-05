@@ -6,11 +6,12 @@ import time
 logger = logging.getLogger('ReseMara')
 
 class MacroEngine:
-    def __init__(self, device, macro_flow, progress_file='progress.json'):
+    def __init__(self, device, macro_flow, stop_event, progress_file='progress.json'):
         self.device = device
         self.macro_flow = macro_flow
         self.state_keys = list(self.macro_flow.keys())
         self.progress_file = progress_file
+        self.stop_event = stop_event
 
         self.current_state_index = 0
         self.current_action_index = 0
@@ -58,17 +59,29 @@ class MacroEngine:
     def run(self):
         """Runs the entire macro flow."""
         while self.current_state_index < len(self.state_keys):
+            if self.stop_event.is_set():
+                logger.info("매크로 중지 신호 감지됨 (상태 루프).")
+                break
+
             state_name = self.state_keys[self.current_state_index]
             actions = self.macro_flow[state_name]
 
             logger.info(f"========[ 상태 시작: {state_name} ]========")
 
             while self.current_action_index < len(actions):
+                if self.stop_event.is_set():
+                    logger.info("매크로 중지 신호 감지됨 (액션 루프).")
+                    break
+
                 action_details = actions[self.current_action_index]
                 comment = action_details.get('comment', 'N/A')
                 logger.info(f"-----> 행동 실행: {action_details['action']} ({comment})")
 
                 success, result = self._execute_action(action_details)
+
+                if self.stop_event.is_set():
+                    logger.info("행동 실행 후 중지 신호 감지됨.")
+                    break
 
                 if not success:
                     if action_details.get('optional', False):
@@ -108,7 +121,9 @@ class MacroEngine:
                 self.current_action_index = 0
                 continue # Continue to the next state
 
-            # This code is reached if the inner loop was broken by a command (branch, restart)
+            # This code is reached if the inner loop was broken by a command (branch, restart, stop)
+            if self.stop_event.is_set():
+                break
             if result == '__RESTART__':
                 continue # Restart the outer while loop
             elif result and result in self.state_keys:
@@ -120,12 +135,12 @@ class MacroEngine:
         params = action_details.get('params', {})
 
         action_map = {
-            'sequence': self._perform_sequence,
-            'touch_sequence': self._perform_touch_sequence,
-            'click_position': self.device.click_position,
-            'input_text': self.device.input_text_via_adb,
-            'close_app': self.device.close_current_app,
-            'special': self._handle_special,
+            'Image_Click': self._perform_image_click,
+            'Pos_Click_Then_Image_Click': self._perform_pos_click_then_image_click,
+            'Click_Pos': self.device.click_position,
+            'Input_Text': self.device.input_text_via_adb,
+            'Close_App': self.device.close_current_app,
+            'Special_Command': self._handle_special_command,
         }
 
         method = action_map.get(action_type)
@@ -134,7 +149,10 @@ class MacroEngine:
             return False, None
 
         try:
-            # The methods should return True/False for success, and an optional result for branching
+            # Pass stop_event to methods that support it
+            if action_type in ['Image_Click', 'Pos_Click_Then_Image_Click', 'Special_Command']:
+                params['stop_event'] = self.stop_event
+
             result = method(**params)
             if isinstance(result, tuple):
                 return result
@@ -145,15 +163,17 @@ class MacroEngine:
 
     # --- Action Implementations ---
 
-    def _perform_sequence(self, wait_image, click_image=None, wait_time=5, threshold=0.75, timeout=20):
+    def _perform_image_click(self, wait_image, click_image=None, wait_time=5, threshold=0.75, timeout=20, stop_event=None):
         if click_image is None:
             click_image = wait_image
 
         logger.debug(f"이미지 '{wait_image}'를 기다리는 중...")
-        if self.device.wait_for_image(wait_image, threshold=threshold, timeout=timeout):
+        if self.device.wait_for_image(wait_image, threshold=threshold, timeout=timeout, stop_event=stop_event):
+            if stop_event and stop_event.is_set(): return False
             logger.debug(f"이미지 '{click_image}'를 클릭하는 중...")
-            if self.device.find_and_click(click_image, threshold=threshold, timeout=5):
+            if self.device.find_and_click(click_image, threshold=threshold, timeout=5, stop_event=stop_event):
                 logger.info(f"'{click_image}' 클릭 성공.")
+                if stop_event and stop_event.is_set(): return False
                 time.sleep(wait_time)
                 return True
             else:
@@ -163,23 +183,27 @@ class MacroEngine:
             logger.error(f"'{wait_image}' 이미지를 시간 내에 찾지 못했습니다.")
             return False
 
-    def _perform_touch_sequence(self, x=300, y=300, wait_image=None, click_image=None, wait_time=5, threshold=0.75, timeout=20):
+    def _perform_pos_click_then_image_click(self, x=300, y=300, wait_image=None, click_image=None, wait_time=5, threshold=0.75, timeout=20, stop_event=None):
         if click_image is None and wait_image is not None:
             click_image = wait_image
 
+        if stop_event and stop_event.is_set(): return False
         time.sleep(2)
         self.device.click_position(x, y) # Initial touch
 
         if not wait_image:
+            if stop_event and stop_event.is_set(): return False
             time.sleep(wait_time)
             return True
 
         logger.debug(f"이미지 '{wait_image}'를 기다리는 중...")
-        if self.device.wait_for_image(wait_image, threshold=threshold, timeout=timeout):
+        if self.device.wait_for_image(wait_image, threshold=threshold, timeout=timeout, stop_event=stop_event):
+            if stop_event and stop_event.is_set(): return False
             self.device.click_position(x, y) # Second touch before image click
             logger.debug(f"이미지 '{click_image}'를 클릭하는 중...")
-            if self.device.find_and_click(click_image, threshold=threshold, timeout=5):
+            if self.device.find_and_click(click_image, threshold=threshold, timeout=5, stop_event=stop_event):
                 logger.info(f"'{click_image}' 클릭 성공.")
+                if stop_event and stop_event.is_set(): return False
                 time.sleep(wait_time)
                 return True
             else:
@@ -191,7 +215,7 @@ class MacroEngine:
 
     # --- Special Command Handlers ---
 
-    def _handle_special(self, command, **kwargs):
+    def _handle_special_command(self, command, stop_event=None, **kwargs):
         """Handles special commands that require more complex logic."""
         if command == 'compare_and_branch':
             result = self.device.compare_images(kwargs['image1_name'], kwargs['image2_name'])
@@ -202,29 +226,34 @@ class MacroEngine:
 
         elif command == 'repeat_beginner_gacha':
             for i in range(kwargs.get('count', 5)):
+                if stop_event and stop_event.is_set():
+                    logger.info("매크로 중지됨 (special_command).")
+                    return False
                 logger.info(f"초보자 뽑기 {i+1}/{kwargs.get('count', 5)}회차 진행...")
-                if not self._perform_sequence('recruit_button', wait_time=2): return False
-                if not self._perform_sequence('beginner_draw_10_times', wait_time=5): return False
-                if not self.device.close_current_app(): return False
+                if not self._perform_image_click('recruit_button', wait_time=2, stop_event=stop_event): return False, None
+                if not self._perform_image_click('beginner_draw_10_times', wait_time=5, stop_event=stop_event): return False, None
+                if not self.device.close_current_app(): return False, None
+                if stop_event and stop_event.is_set(): return False, None
                 time.sleep(10)
-                if not self._perform_sequence('app_icon', wait_time=2): return False
-                if not self._perform_sequence('title_start', wait_time=5, optional=True):
-                    self._perform_sequence('title_start', wait_time=5) # Retry
-            return True
+                if not self._perform_image_click('app_icon', wait_time=2, stop_event=stop_event): return False, None
+                if not self._perform_image_click('title_start', wait_time=5, optional=True, stop_event=stop_event):
+                    self._perform_image_click('title_start', wait_time=5, stop_event=stop_event) # Retry
+            return True, None
 
         elif command == 'app_restart':
             self.device.close_current_app()
+            if stop_event and stop_event.is_set(): return False, None
             time.sleep(5)
-            self._perform_sequence('app_icon', wait_time=5)
-            if not self._perform_sequence('title_start', wait_time=5, optional=True):
-                 self._perform_sequence('title_start', wait_time=5) # Retry
-            return True
+            self._perform_image_click('app_icon', wait_time=5, stop_event=stop_event)
+            if not self._perform_image_click('title_start', wait_time=5, optional=True, stop_event=stop_event):
+                 self._perform_image_click('title_start', wait_time=5, stop_event=stop_event) # Retry
+            return True, None
 
         elif command == '__RESTART__':
             return True, '__RESTART__'
 
         else:
             logger.error(f"알 수 없는 특수 명령어: {command}")
-            return False
+            return False, None
 
-        return True
+        return True, None

@@ -204,7 +204,7 @@ class ReseMara:
             return None
 
     """==========[ 매크로 보 기능 ]=========="""
-    def find_and_click(self, image_name, threshold=0.75, timeout=30):
+    def find_and_click(self, image_name, threshold=0.75, timeout=30, stop_event=None):
         try:
             template_path = f'Ref_Img/{image_name}.png'
             
@@ -216,6 +216,9 @@ class ReseMara:
             
             start_time = time.time()
             while True:
+                if stop_event and stop_event.is_set():
+                    logger.info("매크로 중지됨 (find_and_click).")
+                    return False
                 if time.time() - start_time > timeout:
                     logger.error(f"{timeout}초 동안 이미지를 찾지 못했습니다: {image_name}")
                     return False
@@ -252,7 +255,7 @@ class ReseMara:
             wait_for_user_input()
             return False
 
-    def wait_for_image(self, image_name, threshold=0.75, timeout=20):
+    def wait_for_image(self, image_name, threshold=0.75, timeout=20, stop_event=None):
         try:
             template_path = f'Ref_Img/{image_name}.png'
             
@@ -264,6 +267,9 @@ class ReseMara:
             
             start_time = time.time()
             while True:
+                if stop_event and stop_event.is_set():
+                    logger.info("매크로 중지됨 (wait_for_image).")
+                    return False
                 if time.time() - start_time > timeout:
                     logger.error(f"{timeout}초 동안 이미지를 찾지 못했습니다: {image_name}")
                     return False
@@ -396,93 +402,3 @@ class ReseMara:
             logger.error(f"이미지 비교 중 오류 발생: {str(e)}")
             return 1  # 오류 발생시 종료
     
-from macro_engine import MacroEngine
-from macro_flow import MACRO_FLOW
-
-if __name__ == "__main__":
-    logger.debug("프로그램 시작")
-    # 종료 시 cleanup 함수 등록
-    atexit.register(cleanup)
-    
-    # Ctrl+C핸들러 등록
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    # port.log 파일 경로 바탕화면으로 설정
-    port_log_file = os.path.join(os.path.expanduser("~"), "Desktop", "port.log")
-    
-    # 포트 입력 또는 자동 순환
-    port_input = input("MuMu Player의 ADB 포트를 입력하세요 (자동 검색은 Enter): ").strip()
-
-    if port_input:
-        # 수동 포트 입력의 경우
-        try:
-            adb_port = int(port_input)
-            if 1024 <= adb_port <= 65535:
-                ports_to_try = [adb_port]
-            else:
-                logger.error("유효하지 않은 포트 번호입니다. 자동 검색을 시작합니다.")
-                ports_to_try = [16384, 16416, 16448, 16480, 16512, 16544, 16576]
-        except ValueError:
-            logger.error("올바른 포트 번호가 아닙니다. 자동 검색을 시작합니다.")
-            ports_to_try = [16384, 16416, 16448, 16480, 16512, 16544, 16576]
-    else:
-        # 자동 순환의 경우, 먼저 port.log 확인
-        try:
-            # MuMu 에뮬레이터의 일반적인 ADB 포트 리스트
-            mumu_ports = [16384, 16416, 16448, 16480, 16512, 16544, 16576]
-            
-            if os.path.exists(port_log_file):
-                with open(port_log_file, 'r') as f:
-                    used_ports = [int(port.strip()) for port in f.readlines() if port.strip()]
-                    logger.info(f"이전 성공 포트들: {used_ports}")
-                    # 이미 사용 중인 포트들을 제외한 나머지 포트들 리스트 생성
-                    ports_to_try = [p for p in mumu_ports if p not in used_ports]
-            else:
-                ports_to_try = mumu_ports
-                logger.info("포트 자동 검색을 시작합니다 (MuMu 에뮬레이터 포트)")
-        except Exception as e:
-            logger.error(f"포트 로그 파일 읽기 실패: {str(e)}")
-            ports_to_try = mumu_ports
-    
-    macro = None
-    try:
-        # port.log 파일 생성/추가
-        try:
-            # port.log 파일이 없으면 생성, 있으면 유지
-            if not os.path.exists(port_log_file):
-                open(port_log_file, 'w').close()
-        except Exception as e:
-            logger.error(f"포트 로그 파일 생성 실패: {str(e)}")
-
-        for port in ports_to_try:
-            try:
-                logger.debug(f"포트 {port}로 연결 시도 중...")
-                macro = ReseMara(port)
-                logger.info(f"포트 {port}로 연결 성공!")
-                # 성공한 포트 번호를 파일에 추가
-                try:
-                    with open(port_log_file, 'a') as f:
-                        f.write(f"{port}\n")
-                except Exception as e:
-                    logger.error(f"포트 로그 파일 쓰기 실패: {str(e)}")
-                break
-            except Exception as e:
-                logger.debug(f"포트 {port} 연결 실패: {str(e)}")
-                continue
-        
-        if macro is None:
-            logger.error("사용 가능한 ADB 포트를 찾지 못했습니다.")
-            exit(1)
-        
-        logger.info("연결 테스트가 완료되었습니다.")
-        logger.info("매크로를 시작합니다.")
-        
-        engine = MacroEngine(macro, MACRO_FLOW)
-        engine.run()
-
-        logger.info("매크로가 완료되었습니다.")
-            
-    except KeyboardInterrupt:
-        logger.info("\n사용자가 프로그램을 중단했습니다.")
-    except Exception as e:
-        logger.error(f"예상치 못한 오류 발생: {str(e)}")
