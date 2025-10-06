@@ -392,7 +392,7 @@ class ReseMara:
                 shutil.copy2('ReseMara.log', f"{account_filename}.log")
                 
                 # 자동 판단
-                if result1 and result2:  # 둘 중 하나라도 발견되면 종료
+                if result1 or result2:  # 둘 중 하나라도 발견되면 종료
                     logger.info("목표 캐릭터가 발견되어 매크로를 종료합니다.")
                     return 1
                 else:  # 둘 다 발견되지 않으면 리셋
