@@ -1,0 +1,6 @@
+adb-shell
+pillow
+opencv-python
+numpy
+pyinstaller
+python-dateutil
