@@ -23,15 +23,38 @@ def build_exe():
     subprocess.run(['pip', 'install', '-r', 'requirements.txt'])
     
     print("exe 파일 생성 중...")
+    
+    # 새로운 모듈 구조를 위한 hidden imports
+    hidden_imports = [
+        'config',
+        'config.settings',
+        'core',
+        'core.adb_manager',
+        'core.screen_capture',
+        'core.image_matcher',
+        'macro',
+        'macro.base_macro',
+        'macro.game_macro',
+        'macro.script_loader',
+        'utils',
+        'utils.logger',
+        'utils.file_manager',
+    ]
+    
+    hidden_import_args = []
+    for module in hidden_imports:
+        hidden_import_args.extend(['--hidden-import', module])
+    
     subprocess.run([
         'pyinstaller',
         '--onefile',  # 단일 exe 파일로 생성
         '--name', 'ReseMara',  # 출력 파일 이름
-        'ReseMara.py'
+        *hidden_import_args,  # hidden imports
+        'main.py'  # main.py를 진입점으로 사용
     ])
     
     print("빌드 완료!")
     print("생성된 exe 파일 위치: dist/ReseMara.exe")
 
 if __name__ == "__main__":
-    build_exe() 
+    build_exe()
